@@ -209,7 +209,7 @@ func TestVerifyTokenPreSTSValidations(t *testing.T) {
 func TestVerifyHTTPThrottling(t *testing.T) {
 	testVerifier := newVerifier("aws", 400, "{\\\"Error\\\":{\\\"Code\\\":\\\"Throttling\\\",\\\"Message\\\":\\\"Rate exceeded\\\",\\\"Type\\\":\\\"Sender\\\"},\\\"RequestId\\\":\\\"8c2d3520-24e1-4d5c-ac55-7e226335f447\\\"}", nil)
 	_, err := testVerifier.Verify(validToken)
-	errorContains(t, err, "sts getCallerIdentity was throttled")
+	errorContains(t, err, "sts getCallerIdentity for account 073224499664 was throttled")
 	assertSTSThrottling(t, err)
 }
 
