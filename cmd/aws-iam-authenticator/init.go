@@ -73,6 +73,9 @@ var initCmd = &cobra.Command{
 }
 
 func init() {
+	viper.AutomaticEnv()
+	viper.SetEnvPrefix("aws_iam_authenticator")
+
 	initCmd.Flags().String(
 		"hostname",
 		"localhost",
