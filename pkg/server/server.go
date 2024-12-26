@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	aws_config "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/account"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
@@ -40,6 +42,7 @@ import (
 	"sigs.k8s.io/aws-iam-authenticator/pkg/mapper/dynamicfile"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/mapper/file"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/metrics"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/regions"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
 
 	awsarn "github.com/aws/aws-sdk-go/aws/arn"
@@ -142,6 +145,30 @@ func New(cfg config.Config, stopCh <-chan struct{}) *Server {
 	errLog := logrus.WithField("http", "error").Writer()
 	defer errLog.Close()
 
+	var discoverer regions.Discoverer
+	switch cfg.EndpointValidationMode {
+	case "Legacy", "":
+		// TODO: get region?
+		discoverer = regions.NewSdkV1Discoverer(cfg.PartitionID, "")
+	case "API":
+		awscfg, err := aws_config.LoadDefaultConfig(context.TODO())
+		if err != nil {
+			logrus.WithError(err).Fatal("unable to create AWS config")
+		}
+		client := account.NewFromConfig(awscfg)
+		discoverer = regions.NewAPIDiscoverer(client, cfg.PartitionID)
+	case "File":
+		discoverer = regions.NewFileDiscoverer(cfg.EndpointValidationFile)
+	default:
+		// Defensive check here in case the cmd validation fails
+		logrus.WithField("server.endpointValidationMode", cfg.EndpointValidationMode).Fatalf(
+			`invalid EndpointValidationMode, must be one of "Legacy", "API", or "File"`)
+	}
+	c.endpointVerifier, err = regions.NewEndpointVerifier(discoverer)
+	if err != nil {
+		logrus.WithError(err).Fatal("could not create endpoint verifier")
+	}
+
 	logrus.Infof("listening on %s", listener.Addr())
 	logrus.Infof("reconfigure your apiserver with `--authentication-token-webhook-config-file=%s` to enable (assuming default hostPath mounts)", c.GenerateKubeconfigPath)
 	internalHandler := c.getHandler(backendMapper, c.EC2DescribeInstancesQps, c.EC2DescribeInstancesBurst, stopCh)
@@ -162,16 +189,17 @@ func (c *Server) Run(stopCh <-chan struct{}) {
 	go func() {
 		http.ListenAndServe(":21363", &healthzHandler{})
 	}()
-	go func() {
+	go func(s *Server) {
 		for {
 			select {
 			case <-stopCh:
 				logrus.Info("shut down mapper before return from Run")
-				close(c.internalHandler.backendMapper.mapperStopCh)
+				close(s.internalHandler.backendMapper.mapperStopCh)
+				c.endpointVerifier.Stop()
 				return
 			}
 		}
-	}()
+	}(c)
 	if err := c.httpServer.Serve(c.listener); err != nil {
 		logrus.WithError(err).Warning("http server exited")
 	}
@@ -191,6 +219,7 @@ type healthzHandler struct{}
 func (m *healthzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "ok")
 }
+
 func (c *Server) getHandler(backendMapper BackendMapper, ec2DescribeQps int, ec2DescribeBurst int, stopCh <-chan struct{}) *handler {
 	if c.ServerEC2DescribeInstancesRoleARN != "" {
 		_, err := awsarn.Parse(c.ServerEC2DescribeInstancesRoleARN)
@@ -206,7 +235,7 @@ func (c *Server) getHandler(backendMapper BackendMapper, ec2DescribeQps int, ec2
 	}
 
 	h := &handler{
-		verifier:                  token.NewVerifier(c.ClusterID, c.PartitionID, instanceRegion),
+		verifier:                  token.NewVerifier(c.ClusterID, c.endpointVerifier),
 		ec2Provider:               ec2provider.New(c.ServerEC2DescribeInstancesRoleARN, c.SourceARN, instanceRegion, ec2DescribeQps, ec2DescribeBurst),
 		clusterID:                 c.ClusterID,
 		backendMapper:             backendMapper,

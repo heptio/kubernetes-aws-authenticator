@@ -19,15 +19,17 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 
+	"sigs.k8s.io/aws-iam-authenticator/pkg/regions"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
 
-	"github.com/aws/aws-sdk-go/aws/ec2metadata"
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/aws/aws-sdk-go/aws/session"
+	aws_config "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/account"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -41,6 +43,8 @@ var verifyCmd = &cobra.Command{
 		output := viper.GetString("output")
 		clusterID := viper.GetString("clusterID")
 		partition := viper.GetString("partition")
+		endpointValidationMode := viper.GetString("server.endpointValidationMode")
+		endpointValidationFile := viper.GetString("server.endpointValidationFile")
 
 		if tok == "" {
 			fmt.Fprintf(os.Stderr, "error: token not specified\n")
@@ -54,14 +58,31 @@ var verifyCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		sess := session.Must(session.NewSession())
-		ec2metadata := ec2metadata.New(sess)
-		instanceRegion, err := ec2metadata.Region()
+		var discoverer regions.Discoverer
+		switch endpointValidationMode {
+		case "Legacy", "":
+			// TODO: get region?
+			discoverer = regions.NewSdkV1Discoverer(partition, "")
+		case "API":
+			awscfg, err := aws_config.LoadDefaultConfig(context.TODO())
+			if err != nil {
+				logrus.WithError(err).Fatal("unable to create AWS config")
+			}
+			client := account.NewFromConfig(awscfg)
+			discoverer = regions.NewAPIDiscoverer(client, partition)
+		case "File":
+			discoverer = regions.NewFileDiscoverer(endpointValidationFile)
+		default:
+			// Defensive check here in case the cmd validation fails
+			logrus.WithField("server.endpointValidationMode", endpointValidationMode).Fatalf(
+				`invalid EndpointValidationMode, must be one of "Legacy", "API", or "File"`)
+		}
+		endpointVerifier, err := regions.NewEndpointVerifier(discoverer)
 		if err != nil {
-			fmt.Printf("[Warn] Region not found in instance metadata, err: %v", err)
+			logrus.WithError(err).Fatal("could not create endpoint verifier")
 		}
 
-		id, err := token.NewVerifier(clusterID, partition, instanceRegion).Verify(tok)
+		id, err := token.NewVerifier(clusterID, endpointVerifier).Verify(tok)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "could not verify token: %v\n", err)
 			os.Exit(1)
@@ -86,14 +107,27 @@ func init() {
 	viper.BindPFlag("token", verifyCmd.Flags().Lookup("token"))
 	viper.BindPFlag("output", verifyCmd.Flags().Lookup("output"))
 
-	partitionKeys := []string{}
-	for _, p := range endpoints.DefaultPartitions() {
-		partitionKeys = append(partitionKeys, p.ID())
+	partitionKeys := []string{
+		"aws",
+		"aws-cn",
+		"aws-us-gov",
+		"aws-iso",
+		"aws-iso-b",
+		"aws-iso-e",
+		"aws-iso-f",
 	}
-
 	verifyCmd.Flags().String("partition",
-		endpoints.AwsPartitionID,
+		"aws",
 		fmt.Sprintf("The AWS partition. Must be one of: %v", partitionKeys))
 	viper.BindPFlag("partition", verifyCmd.Flags().Lookup("partition"))
+
+	verifyCmd.Flags().String("endpoint-validation-mode",
+		"Legacy",
+		`The method for discovering valid regions. Must be one of "Legacy", "File", or "API"`)
+	viper.BindPFlag("server.endpointValidationMode", verifyCmd.Flags().Lookup("endpoint-validation-mode"))
+
+	verifyCmd.Flags().String("endpoint-validation-file", "",
+		`The file to use for endpoint validation. Only used if endpoint-validation-mode is "File"`)
+	viper.BindPFlag("server.endpointValidationFile", verifyCmd.Flags().Lookup("endpoint-validation-file"))
 
 }

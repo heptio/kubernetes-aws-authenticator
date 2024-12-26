@@ -38,7 +38,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/aws/aws-sdk-go/service/sts/stsiface"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/pkg/apis/clientauthentication"
 	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
@@ -46,6 +45,7 @@ import (
 	"sigs.k8s.io/aws-iam-authenticator/pkg/arn"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/filecache"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/metrics"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/regions"
 )
 
 // Identity is returned on successful Verify() results. It contains a parsed
@@ -373,82 +373,13 @@ type Verifier interface {
 }
 
 type tokenVerifier struct {
-	client            *http.Client
-	clusterID         string
-	validSTShostnames map[string]bool
-}
-
-func getDefaultHostNameForRegion(partition *endpoints.Partition, region, service string) (string, error) {
-	rep, err := partition.EndpointFor(service, region, endpoints.STSRegionalEndpointOption, endpoints.ResolveUnknownServiceOption)
-	if err != nil {
-		return "", fmt.Errorf("Error resolving endpoint for %s in partition %s. err: %v", region, partition.ID(), err)
-	}
-	parsedURL, err := url.Parse(rep.URL)
-	if err != nil {
-		return "", fmt.Errorf("Error parsing STS URL %s. err: %v", rep.URL, err)
-	}
-	return parsedURL.Hostname(), nil
-}
-
-func stsHostsForPartition(partitionID, region string) map[string]bool {
-	validSTShostnames := map[string]bool{}
-
-	var partition *endpoints.Partition
-	for _, p := range endpoints.DefaultPartitions() {
-		if partitionID == p.ID() {
-			partition = &p
-			break
-		}
-	}
-	if partition == nil {
-		logrus.Errorf("Partition %s not valid", partitionID)
-		return validSTShostnames
-	}
-
-	stsSvc, ok := partition.Services()[stsServiceID]
-	if !ok {
-		logrus.Errorf("STS service not found in partition %s", partitionID)
-		// Add the host of the current instances region if the service doesn't already exists in the partition
-		// so we don't fail if the service is not present in the go sdk but matches the instances region.
-		stsHostName, err := getDefaultHostNameForRegion(partition, region, stsServiceID)
-		if err != nil {
-			logrus.WithError(err).Error("Error getting default hostname")
-		} else {
-			validSTShostnames[stsHostName] = true
-		}
-		return validSTShostnames
-	}
-	stsSvcEndPoints := stsSvc.Endpoints()
-	for epName, ep := range stsSvcEndPoints {
-		rep, err := ep.ResolveEndpoint(endpoints.STSRegionalEndpointOption)
-		if err != nil {
-			logrus.WithError(err).Errorf("Error resolving endpoint for %s in partition %s", epName, partitionID)
-			continue
-		}
-		parsedURL, err := url.Parse(rep.URL)
-		if err != nil {
-			logrus.WithError(err).Errorf("Error parsing STS URL %s", rep.URL)
-			continue
-		}
-		validSTShostnames[parsedURL.Hostname()] = true
-	}
-
-	// Add the host of the current instances region if not already exists so we don't fail if the region is not
-	// present in the go sdk but matches the instances region.
-	if _, ok := stsSvcEndPoints[region]; !ok {
-		stsHostName, err := getDefaultHostNameForRegion(partition, region, stsServiceID)
-		if err != nil {
-			logrus.WithError(err).Error("Error getting default hostname")
-			return validSTShostnames
-		}
-		validSTShostnames[stsHostName] = true
-	}
-
-	return validSTShostnames
+	client           *http.Client
+	clusterID        string
+	endpointVerifier regions.EndpointVerifier
 }
 
 // NewVerifier creates a Verifier that is bound to the clusterID and uses the default http client.
-func NewVerifier(clusterID, partitionID, region string) Verifier {
+func NewVerifier(clusterID string, endpointVerifier regions.EndpointVerifier) Verifier {
 	// Initialize metrics if they haven't already been initialized to avoid a
 	// nil pointer panic when setting metric values.
 	if !metrics.Initialized() {
@@ -462,14 +393,14 @@ func NewVerifier(clusterID, partitionID, region string) Verifier {
 			},
 			Timeout: 10 * time.Second,
 		},
-		clusterID:         clusterID,
-		validSTShostnames: stsHostsForPartition(partitionID, region),
+		clusterID:        clusterID,
+		endpointVerifier: endpointVerifier,
 	}
 }
 
 // verify a sts host, doc: http://docs.amazonaws.cn/en_us/general/latest/gr/rande.html#sts_region
 func (v tokenVerifier) verifyHost(host string) error {
-	if _, ok := v.validSTShostnames[host]; !ok {
+	if !v.endpointVerifier.Verify(host) {
 		return FormatError{fmt.Sprintf("unexpected hostname %q in pre-signed URL", host)}
 	}
 	return nil

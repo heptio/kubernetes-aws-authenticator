@@ -17,6 +17,7 @@
 set -o errexit
 set -o pipefail
 set -o nounset
+set -x
 
 # Check that required binaries are installed
 command -v make >/dev/null 2>&1 || { echo >&2 "make is required but it's not installed.  Aborting."; exit 1; }
@@ -31,13 +32,18 @@ fi
 
 OUTPUT="${OUTPUT:-${REPO_ROOT}/_output}"
 
+err_report() {
+    echo "Exited with error on line $1"
+}
+trap 'err_report $LINENO' ERR
+
 # Parameters
 
 # Parameters required to be set by caller for dev environment creation only:
 #   AUTHENTICATOR_IMAGE
 #   ADMIN_ARN
 
-# Parameters with sane defaults: 
+# Parameters with sane defaults:
 AUTHENTICATOR_BIN="${AUTHENTICATOR_BIN:-${OUTPUT}/bin/aws-iam-authenticator}"
 REGION="${REGION:-us-west-2}"
 APISERVER_URL="${APISERVER_URL:-https://127.0.0.1:6443}"

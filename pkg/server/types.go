@@ -22,15 +22,17 @@ import (
 
 	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/mapper"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/regions"
 )
 
 // Server for the authentication webhook.
 type Server struct {
 	// Config is the whole configuration of aws-iam-authenticator used for valid keys and certs, kubeconfig, and so on
 	config.Config
-	httpServer      http.Server
-	listener        net.Listener
-	internalHandler *handler
+	httpServer       http.Server
+	listener         net.Listener
+	internalHandler  *handler
+	endpointVerifier regions.EndpointVerifier
 }
 
 type BackendMapper struct {

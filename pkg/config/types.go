@@ -189,6 +189,20 @@ type Config struct {
 	ReservedPrefixConfig map[string]ReservedPrefixConfig
 	// Dynamic File Path for BackendMode
 	DynamicBackendModePath string
+
+	// EndpointDiscovererMode is a method for determining how to validate STS domain names in presigned URLs.
+	// Must be one of "Legacy" (default until June 2025), "API", or "File".
+	//
+	// Legacy uses the AWS SDK Go v1 endpoint list to validate that the STS region in an incoming token is valid
+	// for a given partition.
+	//
+	// API makes the server invoke the AWS API call `account:ListRegions` to find a list of valid regions.
+	//
+	// File has the server read a file containing a JSON list of strings with valid STS endpoints.
+	EndpointValidationMode string
+
+	// EndpointValidationFile the file path when EndpointValidationMode's value is "File"
+	EndpointValidationFile string
 }
 
 type ReservedPrefixConfig struct {

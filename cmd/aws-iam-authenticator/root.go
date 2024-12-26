@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +25,10 @@ import (
 	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/mapper"
 
-	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
+	aws_config "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -111,6 +115,9 @@ func getConfig() (config.Config, error) {
 		DynamicFileUserIDStrict: viper.GetBool("server.dynamicfileUserIDStrict"),
 		//DynamicBackendModePath: the file path containing the backend mode
 		DynamicBackendModePath: viper.GetString("server.dynamicBackendModePath"),
+
+		EndpointValidationMode: viper.GetString("server.endpointValidationMode"),
+		EndpointValidationFile: viper.GetString("server.endpointValidationFile"),
 	}
 	if err := viper.UnmarshalKey("server.mapRoles", &cfg.RoleMappings); err != nil {
 		return cfg, fmt.Errorf("invalid server role mappings: %v", err)
@@ -143,14 +150,38 @@ func getConfig() (config.Config, error) {
 		return cfg, errors.New("cluster ID cannot be empty")
 	}
 
-	partitionKeys := []string{}
-	partitionMap := map[string]endpoints.Partition{}
-	for _, p := range endpoints.DefaultPartitions() {
-		partitionMap[p.ID()] = p
-		partitionKeys = append(partitionKeys, p.ID())
+	// We now discover PartitionID via the STS GCI response
+	if cfg.PartitionID != "" {
+		logrus.Warn("partition ID via config is deprecated")
 	}
-	if _, ok := partitionMap[cfg.PartitionID]; !ok {
-		return cfg, errors.New("Invalid partition")
+
+	awscfg, err := aws_config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		logrus.WithError(err).Fatal("unable to create AWS config")
+	}
+	client := sts.NewFromConfig(awscfg)
+	identity, err := client.GetCallerIdentity(context.TODO(), nil)
+	if err != nil {
+		logrus.WithError(err).Fatal("unable to call sts:GetCallerIdentity")
+	}
+	serverArn, err := arn.Parse(aws.ToString(identity.Arn))
+	if err != nil {
+		logrus.WithError(err).WithField("arn", aws.ToString(identity.Arn)).Fatal("unable to parse sts:GetCallerIdentity ARN response")
+	}
+	cfg.PartitionID = serverArn.Partition
+
+	switch cfg.EndpointValidationMode {
+	case "Legacy", "":
+		cfg.EndpointValidationMode = "Legacy"
+	case "API":
+	case "File":
+		if _, err := os.Stat(cfg.EndpointValidationFile); err != nil {
+			logrus.WithField("path", cfg.EndpointValidationFile).Fatal("Error calling stat() on server.endpointValidationFile")
+		}
+	default:
+		// Defensive check here in case the cmd validation fails
+		logrus.WithField("server.endpointValidationMode", cfg.EndpointValidationMode).Fatalf(
+			`invalid EndpointValidationMode, must be one of "Legacy", "API", or "File" (empty defaults to "Legacy")`)
 	}
 
 	// DynamicFile BackendMode and DynamicFilePath are mutually inclusive.
