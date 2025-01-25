@@ -59,6 +59,8 @@ func init() {
 
 	rootCmd.PersistentFlags().StringP("log-format", "l", "text", "Specify log format to use when logging to stderr [text or json]")
 
+	rootCmd.PersistentFlags().StringP("loglevel", "", "info", "Set the log level (debug, info, warn, error, fatal)")
+
 	rootCmd.PersistentFlags().StringP(
 		"cluster-id",
 		"i",
@@ -75,6 +77,7 @@ func init() {
 
 func initConfig() {
 	logrus.SetFormatter(getLogFormatter())
+	logrus.SetLevel(getLogLevel())
 	if cfgFile == "" {
 		return
 	}
@@ -184,4 +187,16 @@ func getLogFormatter() logrus.Formatter {
 	}
 
 	return &logrus.TextFormatter{FullTimestamp: true}
+}
+
+func getLogLevel() logrus.Level {
+	logLevel, _ := rootCmd.PersistentFlags().GetString("loglevel")
+
+	level, err := logrus.ParseLevel(logLevel)
+	if err != nil {
+		logrus.Warnf("Unknown log format specified (%s), will use default text formatter instead.", logLevel)
+		return logrus.InfoLevel
+	}
+	logrus.Info("Log level set to ", logLevel)
+	return level
 }
