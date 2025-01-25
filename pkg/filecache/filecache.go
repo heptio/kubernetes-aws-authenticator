@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/gofrs/flock"
 	"github.com/spf13/afero"
+	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 )
 
@@ -211,11 +212,15 @@ func (f *FileCacheProvider) Retrieve() (credentials.Value, error) {
 // otherwise fetching the credential from the underlying Provider and caching the results on disk
 // with an expiration time.
 func (f *FileCacheProvider) RetrieveWithContext(ctx context.Context) (credentials.Value, error) {
+	var quiet bool = viper.GetBool("quiet")
+
 	if !f.cachedCredential.Expired() && f.cachedCredential.HasKeys() {
 		// use the cached credential
 		return V2CredentialToV1Value(f.cachedCredential), nil
 	} else {
-		_, _ = fmt.Fprintf(os.Stderr, "No cached credential available.  Refreshing...\n")
+		if !quiet {
+			_, _ = fmt.Fprintf(os.Stderr, "No cached credential available.  Refreshing...\n")
+		}
 		// fetch the credentials from the underlying Provider
 		credential, err := f.provider.Retrieve(ctx)
 		if err != nil {
@@ -246,7 +251,7 @@ func (f *FileCacheProvider) RetrieveWithContext(ctx context.Context) (credential
 				// can't write cache, but still return the credential
 				_, _ = fmt.Fprintf(os.Stderr, "Unable to update credential cache %s: %v\n", f.filename, err)
 				err = nil
-			} else {
+			} else if !quiet {
 				_, _ = fmt.Fprintf(os.Stderr, "Updated cached credential\n")
 			}
 		} else {

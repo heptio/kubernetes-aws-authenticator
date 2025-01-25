@@ -57,6 +57,9 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "Load configuration from `filename`")
 
+	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "Reduce output verbosity")
+	viper.BindPFlag("quiet", rootCmd.PersistentFlags().Lookup("quiet"))
+
 	rootCmd.PersistentFlags().StringP("log-format", "l", "text", "Specify log format to use when logging to stderr [text or json]")
 
 	rootCmd.PersistentFlags().StringP(
