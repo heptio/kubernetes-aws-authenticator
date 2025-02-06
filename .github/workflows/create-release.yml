@@ -4,7 +4,7 @@ name: Create Release
 on:
   push:
     branches:
-      - 'release-*'
+      - 'master'
     paths:
       - version.txt
 
