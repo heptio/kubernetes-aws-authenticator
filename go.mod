@@ -3,8 +3,8 @@ module sigs.k8s.io/aws-iam-authenticator
 go 1.23.4
 
 require (
-	github.com/aws/aws-sdk-go v1.55.5
-	github.com/aws/aws-sdk-go-v2 v1.32.7
+	github.com/aws/aws-sdk-go v1.55.6
+	github.com/aws/aws-sdk-go-v2 v1.36.1
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/gofrs/flock v0.12.1
 	github.com/google/go-cmp v0.6.0
@@ -26,7 +26,7 @@ require (
 )
 
 require (
-	github.com/aws/smithy-go v1.22.1 // indirect
+	github.com/aws/smithy-go v1.22.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
